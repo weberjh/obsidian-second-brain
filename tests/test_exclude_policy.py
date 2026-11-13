@@ -33,7 +33,7 @@ def test_the_base_covers_every_machine_owned_directory():
 
     for d in (".git", ".obsidian", ".trash", "_trash", "_export", "__pycache__",
               "node_modules", ".claude", ".agents", ".codex", ".gemini",
-              ".opencode", "templates"):
+              ".opencode", ".pi", "templates"):
         assert d in _lower(BASE_EXCLUDE_DIRS), f"{d} dropped out of the base policy"
 
 

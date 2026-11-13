@@ -53,6 +53,10 @@ BASE_EXCLUDE_DIRS: frozenset[str] = frozenset({
     ".codex",
     ".gemini",
     ".opencode",
+    # Pi's project/agent config directory. A vault that installs the skill into
+    # .pi/ would otherwise return prompt bodies as search hits - a query for a
+    # topic matched a command's prompt text before its real note (#80 sibling).
+    ".pi",
     # note templates. Scanned, they duplicate every real note's structure.
     # Spelled capital-T by the bootstrapper and lowercase by three tools, hence
     # the case-insensitive matching below.
