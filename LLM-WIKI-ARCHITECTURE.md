@@ -7,7 +7,7 @@ deployment record, written so a future agent can understand the current state, c
 without breaking the invariants, and know which options were considered and rejected.
 
 Last reviewed against:
-- fork `70f4cb0` — fix: exclude `.pi/` from vault scanning
+- fork `644f41c` — docs: record the LLM Wiki deployment architecture
 - vault `fe29472` — config: name both global instruction files in the vault charter
 
 ---
@@ -66,10 +66,13 @@ told to read, not an always-on instruction file. The housekeeping charter (`AGEN
 points at it; the Claude Code hook injects it; the Pi global `AGENTS.md` tells coding
 sessions to read it before writing.
 
-### 2.4 `<vault>/.pi` is a symlink
+### 2.4 `<vault>/.pi` is a real directory with symlinked children
 
 ```
-/Users/jens/Projects/LLM_Wiki/.pi -> /Users/jens/Projects/obsidian-second-brain/dist/pi/.pi
+/Users/jens/Projects/LLM_Wiki/.pi/          real directory
+  prompts -> ../../obsidian-second-brain/dist/pi/.pi/prompts
+  skills  -> ../../obsidian-second-brain/dist/pi/.pi/skills
+  subagents/                               real; pi-subagents schedule store
 ```
 
 This is the single most surprising piece of the deployment. It exists because the Pi
@@ -77,13 +80,25 @@ adapter's design is "copy the built `.pi/` tree into your vault so Pi discovers 
 skill from the project root", while this deployment installs the skill as a **Pi package**
 (§3.3) — so the vault's copy is redundant for discovery. It is kept because a session whose
 cwd *is* the vault resolves the commands' relative `.pi/skills/...` paths natively against
-it. A symlink makes it follow the build instead of drifting from it.
+it. Symlinking the children at the build makes them follow `dist/` instead of drifting
+from it.
+
+**Why the directory itself is real, not a symlink.** `.pi` used to be a single symlink to
+`dist/pi/.pi`. That made every `<vault>/.pi/<x>` path resolve into the fork's build tree,
+which pi-subagents rejects: its schedule store is unconditionally at
+`<project>/.pi/subagents/schedules`, and `assertScheduleRoot` walks up from there to the
+first existing component, takes its realpath, and refuses to write project state that
+lands outside the real project. Without the check it would have created `subagents/`
+inside `dist/` — runtime state in a build artifact. The real `.pi` gives extensions a
+legitimate in-vault home under `.pi/` while `prompts` and `skills` still follow the build.
 
 Two consequences to remember:
-- `.gitignore` lists `.pi` **without a trailing slash**. A trailing slash matches only a real
-  directory; git treats a symlink as a file. `762dca8` fixed exactly this.
-- A `git clean -fdx` in the fork deletes `dist/`, which dangles the symlink. Rebuild with
-  `bash scripts/build.sh --platform pi` and it resolves again.
+- `.gitignore` lists `.pi` **without a trailing slash**. A trailing slash matches only a
+  real directory; git treats a symlink as a file — which mattered when `.pi` was one
+  (`762dca8` fixed exactly this). The pattern now covers the real directory and everything
+  under it, including `subagents/`.
+- A `git clean -fdx` in the fork deletes `dist/`, which dangles the two child symlinks.
+  Rebuild with `bash scripts/build.sh --platform pi` and they resolve again.
 
 ### 2.5 The Inbox capture tier
 
@@ -264,9 +279,9 @@ pi install ./dist/pi          # refresh the Pi package
 /reload                       # in Pi
 ```
 
-The vault's `.pi` symlink needs nothing — it follows `dist/pi/.pi`. The Claude Code commands
-need nothing — they follow `dist/claude-code`. **Only the Pi package needs an explicit
-reinstall**, because `pi install` copies rather than links. That asymmetry is the one
+The vault's `.pi` child symlinks need nothing — they follow `dist/pi/.pi`. The Claude Code
+commands need nothing — they follow `dist/claude-code`. **Only the Pi package needs an
+explicit reinstall**, because `pi install` copies rather than links. That asymmetry is the one
 maintenance step to remember.
 
 ---
@@ -293,11 +308,13 @@ instructions would vanish from the session that needs them. The vault root achie
 exclusion *structurally*: a coding session's cwd is a repo, so the vault is not an ancestor
 and the file never loads. No gitignore entry, no search exclusion, no configuration.
 
-### 6.4 `<vault>/.pi` is a symlink to the build
-The duplicate copy drifts. A symlink means one build feeds both the package and the vault's
-native path. Caveats in §2.4. Considered and rejected: deleting it and putting the Skill-root
-override in the vault charter instead — that works, but then the vault session needs a
-convention where it could have had a mechanism.
+### 6.4 `<vault>/.pi` is a real directory whose children symlink the build
+The duplicate copy drifts. Child symlinks mean one build feeds both the package and the
+vault's native path, while the real directory keeps project state (`subagents/`) inside the
+vault. It was a single symlink until pi-subagents' schedule-store check refused to bind in
+vault sessions (§2.4). Caveats in §2.4. Considered and rejected: deleting it entirely and
+putting the Skill-root override in the vault charter instead — that works, but then the
+vault session needs a convention where it could have had a mechanism.
 
 ### 6.5 `.pi` is excluded from vault scanning
 Before the fix, a search for a topic returned a command's prompt text before the real note —
@@ -428,8 +445,9 @@ bash scripts/build.sh --platform pi
 bash scripts/build.sh --platform claude-code
 pi install ./dist/pi
 ```
-Then `/reload` in Pi and restart Claude Code. The vault's `.pi` symlink and the Claude Code
-command symlinks need nothing. The Pi package is the only surface that needs a reinstall.
+Then `/reload` in Pi and restart Claude Code. The vault's `.pi` child symlinks and the
+Claude Code command symlinks need nothing. The Pi package is the only surface that needs
+a reinstall.
 If the upstream merge touches `scripts/vault_scan.py`, `vault_ops.py` or
 `test_exclude_policy.py`, re-run `uv run pytest tests/test_exclude_policy.py -q` — the `.pi`
 exclusion is pinned there.
@@ -457,10 +475,11 @@ is not auto-discovered and the Claude Code hook only fires in Claude Code. A Pi 
 would then get only the coding-session global file. Re-home the content before deleting it.
 
 ### 8.5 Rebuild the vault's `.pi`
-It is a symlink; there is nothing to rebuild. If it dangles after a `git clean -fdx` in the
-fork, `bash scripts/build.sh --platform pi` recreates `dist/pi/.pi` and the symlink resolves.
-If you ever replace it with a real copy, `update-vault-integration.sh --vault ~/Projects/LLM_Wiki --platform pi`
-is the supported refresh, and `.gitignore`'s `.pi` (no trailing slash) still covers it.
+The directory itself is real; only its `prompts` and `skills` children are symlinks into
+`dist/pi/.pi`. If they dangle after a `git clean -fdx` in the fork, `bash scripts/build.sh --platform pi`
+recreates `dist/pi/.pi` and they resolve again. Do **not** run `update-vault-integration.sh`
+against the vault — it would drop a full copied `.pi/` tree over the real directory,
+burying `subagents/` and reintroducing drift.
 
 ---
 
@@ -510,7 +529,7 @@ are not gitignored. Either ignore them or skip the copy.
 vault              /Users/jens/Projects/LLM_Wiki          git, no remote
   _CLAUDE.md       operating manual, not auto-loaded
   AGENTS.md        housekeeping charter, loads at cwd==vault
-  .pi ->           ~/Projects/obsidian-second-brain/dist/pi/.pi
+  .pi/             real dir; prompts+skills -> fork dist/pi/.pi; subagents/ real
   Inbox/           capture tier; MCP save_note default
 
 fork               /Users/jens/Projects/obsidian-second-brain
