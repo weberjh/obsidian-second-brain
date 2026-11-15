@@ -1,5 +1,5 @@
 ---
-description: Extract transcript, metadata, and top comments from a YouTube video - summarized via Gemini (free tier) or Grok and saved to vault. Add --visual to also read the video's frames (scene detection)
+description: Capture a YouTube video verbatim (description + transcript + chapters, Method A) or summarize it with --summary (Gemini/Grok). Add --summary --visual to also read the video's frames (scene detection)
 category: research
 triggers_en: ["summarize youtube", "youtube transcript", "extract video", "youtube to vault", "watch this video", "what's on screen in this video"]
 triggers_de: ["YouTube zusammenfassen", "YouTube-Transkript", "Video auswerten", "YouTube in den Vault", "dieses Video ansehen", "was ist in diesem Video auf dem Bildschirm"]
@@ -16,33 +16,44 @@ Use the obsidian-second-brain skill. Execute `/youtube [url] [--visual]`:
    ```bash
    uv run --directory "SKILL_ROOT" -m scripts.research.youtube_extract "<url-or-id>"
    ```
-   Add `--visual` when the user wants the video watched, not just transcribed (demos, whiteboards, slides, UI walkthroughs, b-roll, "what's on screen"). Optional `--max-frames N` caps how many frames are read (default 24):
+   By default this produces a **Method A capture** - a verbatim record, not a summary:
+   - the **full video description**, kept verbatim (method A shape);
+   - the **timestamped caption transcript**, grouped under the description's **official chapter markers** when present, otherwise under sections computed from the caption stream;
+   - which caption track was used (**manual** vs **auto-generated**) and the language code;
+   - a `content_hash` for drift detection, and `type: source` frontmatter (the raw-capture schema), so the note is evidence a later agent can re-read.
+
+   Free: `youtube-transcript-api` (no key) for the transcript, YouTube **oEmbed** (no key) for title/channel. With `YOUTUBE_API_KEY` the Data API adds the full description, view/like/comment counts.
+
+   Add `--summary` when the user wants the video *digested* rather than *preserved* (a TL;DR and key points): the transcript is LLM-summarized via Gemini (`GEMINI_API_KEY`, free tier) or Grok, the older `type: youtube` note.
    ```bash
-   uv run --directory "SKILL_ROOT" -m scripts.research.youtube_extract "<url-or-id>" --visual
+   uv run --directory "SKILL_ROOT" -m scripts.research.youtube_extract "<url-or-id>" --summary
+   ```
+   Add `--visual` **with `--summary`** when the user wants the video watched, not just transcribed (demos, whiteboards, slides, UI walkthroughs, b-roll, "what's on screen"). Optional `--max-frames N` caps frames (default 24):
+   ```bash
+   uv run --directory "SKILL_ROOT" -m scripts.research.youtube_extract "<url-or-id>" --summary --visual
    ```
 
-3. The script:
-   - Extracts the transcript via `youtube-transcript-api` (free, no API key).
-   - If `YOUTUBE_API_KEY` is set, also fetches title, channel, view/like counts, top comments. Otherwise skips metadata silently.
-   - Sends the transcript (and optional comments) for AI-first summarization: Gemini (`gemini-2.5-flash`, generous free tier) when `GEMINI_API_KEY` is set, otherwise Grok; a Gemini failure falls back to Grok automatically.
-   - Returns: TL;DR, Key Points, Notable Quotes, Themes & Topics, Comment Sentiment, Worth Following Up On.
-   - With `--visual`: downloads the video (yt-dlp, <=720p) and extracts one frame per scene change (ffmpeg scene detection, not a fixed timer), so visual substance is captured. Hero frames are copied into the vault and embedded in the note; the full keyframe set is left on disk for you to read. Requires `yt-dlp` and `ffmpeg` on PATH (`brew install yt-dlp ffmpeg`). If either is missing or download fails, the visual layer is skipped with a warning and the transcript summary still saves.
+3. What the default capture gives you, and why it matters:
+   - **Description preserved verbatim** - it is source material (the chapters, links, and claims live in it); do not paraphrase it in the note.
+   - **Chapters are the description's own chapter markers**, parsed by YouTube's rule (at least three, starting at `0:00`, strictly increasing). When the description has none, sections are computed from pauses in the caption stream and the note says so.
+   - **The track kind is recorded** (`manual` or `auto`). Manual captions carry speaker labels; auto captions carry ASR garbles. A later agent reading the note needs to know which it has.
+   - No model is in the loop, so nothing is invented or smoothed over.
 
 4. Show the script output verbatim to the user.
 
-5. **Default save behavior: saves automatically.** AI-first note written to `Research/YouTube/YYYY-MM-DD - <video-title-slug>.md`. Frontmatter includes video ID, channel, view counts, `visual`, `frame-count`, etc. for future Dataview queries.
+5. **Default save behavior: saves automatically.** The capture is written to `Research/YouTube/YYYY-MM-DD - <title> (<channel>).md` with `type: source` frontmatter (`source_url`, `source_type: video`, `channel`, `published`, `duration`, `content_hash`, `capture_scope: full-local`). `--summary` instead writes a `type: youtube` note.
 
-6. **If `--visual` was used:** the script prints a `FRAMES-FOR-CLAUDE` JSON block (to stderr) listing each extracted keyframe with its timestamp and local path, plus the saved note path. Do this:
-   - Read each frame image with the read-files tool (they are local JPGs). This is your own vision doing the watching - there is no extra vision-API call.
-   - Then edit the saved note: replace the `<!-- CLAUDE: ... -->` comment in the `## Visual notes` section with a concise, timestamp-keyed reading of what the frames add over the transcript: on-screen text, code, diagrams, slides, UI, demos, b-roll, scene transitions. Cross-reference the Summary; do not restate the audio.
+6. **If `--summary --visual` was used:** the script prints a `FRAMES-FOR-CLAUDE` JSON block (stderr) listing each keyframe with timestamp and local path, plus the saved note path. Do this:
+   - Read each frame image with the read-files tool (they are local JPGs). This is your own vision doing the watching - no extra vision-API call.
+   - Edit the saved note: replace the `<!-- CLAUDE: ... -->` comment in `## Visual notes` with a concise, timestamp-keyed reading of what the frames add over the transcript (on-screen text, code, diagrams, slides, UI, demos, b-roll). Cross-reference the Summary; do not restate the audio.
    - Keep the `## Visual timeline` hero-frame embeds intact.
-   - If `--max-frames` is high and reading every frame would be excessive, read the hero frames plus an even sample across the timeline, and say in the note that you sampled.
+   - If `--max-frames` is high, read the hero frames plus an even sample and say so in the note.
 
-7. Plain English triggers: "summarize this YouTube video", "what's in this video", "extract this YouTube link", "transcribe this video", "watch this video", "what's on screen", or just pasting a YouTube URL with a question about content. When the ask is about what is *shown* (not just said), use `--visual`.
+7. Plain English triggers for the capture: "transcribe this video", "save this video's transcript", "extract this YouTube link", "preserve this talk", or pasting a URL to keep. Triggers for `--summary`: "summarize this YouTube video", "what's in this video", "what did they say". When the ask is about what is *shown* (not said), use `--summary --visual`. When in doubt, capture: a capture can be summarized later, a summary cannot be turned back into a transcript.
 
-8. If the video has no captions (transcript unavailable) AND no metadata (no API key), the script will fail with a clear message - surface it. Suggest the user picks a different video, adds a `YOUTUBE_API_KEY`, or tries `--visual` (which can read the video even without captions).
+8. If the video has no captions AND no description (no `YOUTUBE_API_KEY`), the script fails with a clear message - surface it. Suggest a `YOUTUBE_API_KEY`, `--summary --visual` (which can read the video without captions), or a different video.
 
-9. If the user asks to research something mentioned in the "Worth Following Up On" section, route that to `/research [topic]`.
+9. If the user asks to research something mentioned in a summary's "Worth Following Up On" section, route that to `/research [topic]`.
 
 ---
 

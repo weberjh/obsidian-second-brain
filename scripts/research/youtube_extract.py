@@ -3,26 +3,29 @@
 # SPDX-License-Identifier: MIT
 # Author: Eugeniu Ghelbur (AI Automation Engineer, AI Tooling Engineer, AI Educator), https://github.com/eugeniughelbur/obsidian-second-brain
 # Questions or consulting: e.ghelbur@gmail.com | https://www.linkedin.com/in/eugeniu-ghelbur/ | More: https://theaioperator.io | https://x.com/eugeniu_ghelbur
-"""/youtube [url] [--visual] - extract transcript, metadata, and top comments from a YouTube video.
+"""/youtube [url] [--summary] [--visual] - capture or summarize a YouTube video.
 
-Transcript: free, no API key needed (youtube-transcript-api).
-Metadata + comments: free, requires YOUTUBE_API_KEY (Data API v3).
-Without YOUTUBE_API_KEY: transcript-only mode.
+Default (Method A capture): a **verbatim** note - full description, the timestamped
+caption transcript grouped under the description's official chapter markers (or
+computed caption-stream sections), the manual-vs-auto caption track recorded, and a
+content_hash for drift detection. No LLM call; the transcript and description are
+kept as evidence. Free: youtube-transcript-api (no key) + oEmbed (no key); the Data
+API (YOUTUBE_API_KEY) adds the full description, view counts and comments.
 
-Then summarizes via Grok (cheap call, no live_search).
+--summary: the older behavior - LLM-summarize the transcript via Gemini/Grok into
+TL;DR / Key Points / Notable Quotes / ..., saved as `type: youtube`.
 
---visual: also download the video and extract one frame per scene change (ffmpeg
-scene detection, via lib/video_frames.py). Hero frames are saved into the vault
-and the full keyframe set is printed for Claude to read with its own vision and
-write the Visual notes section. Requires yt-dlp + ffmpeg on PATH. Ported idea from
-claude-watch (MIT, github.com/taoufik123-collab/claude-watch).
+--visual (summary mode): also download the video and extract one frame per scene
+change (ffmpeg scene detection, via lib/video_frames.py).
 
-Default behavior: print to chat AND save AI-first note to Research/YouTube/.
+Default save location: Research/YouTube/ (per vault.SUBFOLDERS).
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -131,17 +134,127 @@ def _extract_visual(video_id: str, title: str, max_frames: int) -> dict | None:
         return None
 
 
+def _canonical(body: str) -> str:
+    """Canonical text for content_hash drift detection (CRLF->LF, list markers,
+    whitespace collapsed) - the same shape the vault's raw captures use."""
+    t = body.replace("\r\n", "\n").replace("\ufeff", "")
+    t = re.sub(r"^[ \t]*[*+][ \t]+", "- ", t, flags=re.M)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def build_capture_note(*, video_id: str, title: str, channel: str, published: str,
+                       duration: str, description: str, transcript_info: dict | None,
+                       today: str, url: str) -> tuple[dict, str]:
+    """Build the Method A capture note: verbatim description + transcript grouped
+    by official chapters (or by computed caption-stream sections). Pure - no I/O -
+    so it is unit-testable."""
+    kind = (transcript_info or {}).get("kind")
+    chapters = youtube.parse_chapters(description)
+    lead = (f"> Source: YouTube video by {channel}, published {published}, duration {duration}, "
+            f"{url}. Captured {today}. ")
+    lines: list[str] = []
+    if transcript_info:
+        if chapters:
+            sections = youtube.sections_from_chapters(transcript_info["segments"], chapters)
+            basis = "the official chapter markers from the description"
+        else:
+            sections = youtube.compute_sections(transcript_info["segments"])
+            basis = "section timestamps computed from the caption stream"
+        lead += (f"Body is the {kind or 'unknown'} caption transcript with {basis}. Video description "
+                 "and transcript retained verbatim; caption garbles are preserved.")
+        for sec in sections:
+            if not sec["texts"]:
+                continue
+            stamp = youtube.seconds_to_timestamp(sec["start"])
+            header = f"### {stamp} - {sec['title']}" if sec.get("title") else f"### {stamp}"
+            lines.append(header)
+            lines.append("")
+            lines.append(" ".join(sec["texts"]).strip())
+            lines.append("")
+    else:
+        lead += "No caption transcript was available; the body is the video description only."
+
+    body = (
+        f"\n{lead}\n\n"
+        f"## Video description (verbatim)\n\n{description.strip() or '(no description available)'}\n\n"
+        f"## Transcript\n\n" + ("\n".join(lines).rstrip() if lines else "(no captions available)") + "\n"
+    )
+    fm = {
+        "title": title,
+        "date": today,
+        "type": "source",
+        "tags": ["source", "transcript", "video"],
+        "source_url": url,
+        "source_type": "video",
+        "content_hash": hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()[:16],
+        "capture_scope": "full-local",
+        "source_quality": "medium",
+        "author": channel,
+        "channel": channel,
+        "published": published,
+        "duration": duration,
+        "ai-first": True,
+    }
+    return fm, body
+
+
+def _run_capture(video_id: str) -> int:
+    """Method A capture: verbatim transcript + description + chapters, no LLM."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    print(f"[/youtube] Capturing video {video_id} (Method A)...", file=sys.stderr)
+    meta = youtube.get_video_metadata(video_id) or {}
+    if not meta.get("title") or not meta.get("channel"):
+        oe = youtube.get_oembed(video_id) or {}
+        meta.setdefault("title", oe.get("title"))
+        meta.setdefault("channel", oe.get("channel"))
+    # Method A needs the description (it carries the chapters). The Data API
+    # supplies it when YOUTUBE_API_KEY is set; the public watch page supplies it
+    # for free otherwise, so a capture keeps its chapters without a key.
+    if not meta.get("description_full"):
+        wp = youtube.get_watch_page_meta(video_id) or {}
+        for k, v in wp.items():
+            if v and not meta.get(k):
+                meta[k] = v
+    title = meta.get("title") or f"Video {video_id}"
+    channel = meta.get("channel") or "(unknown channel)"
+    published = meta.get("published_at") or "(unknown date)"
+    duration = meta.get("duration") or ""
+    description = meta.get("description_full") or meta.get("description") or ""
+    tg = youtube.get_transcript_segments(video_id)
+    if not tg and not description:
+        print("❌ Could not fetch a transcript or description. Is the video public and does it "
+              "have captions? A YOUTUBE_API_KEY supplies the description when captions are absent.",
+              file=sys.stderr)
+        return 1
+    today = datetime.now().strftime("%Y-%m-%d")
+    fm, body = build_capture_note(
+        video_id=video_id, title=title, channel=channel, published=published,
+        duration=duration, description=description, transcript_info=tg, today=today, url=url,
+    )
+    path = vault.write_note("youtube", f"{title} ({channel})", fm, body)
+    print(body)
+    vault.print_save_links(path)
+    vault.append_to_log(f"youtube capture on \"{title}\" - saved to {path.name}")
+    kind = tg["kind"] if tg else "none"
+    print(f"---\n[capture: {kind} captions · {len(tg['segments']) if tg else 0} segments · "
+          f"description {len(description)} chars · chapters: {len(youtube.parse_chapters(description))}]",
+          file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="/youtube", add_help=False)
     parser.add_argument("url", nargs="?", default="")
     parser.add_argument("--visual", action="store_true",
-                        help="download video + extract scene-change frames for Claude to read")
+                        help="download video + extract scene-change frames for Claude to read (summary mode only)")
+    parser.add_argument("--summary", action="store_true",
+                        help="LLM-summarize instead of capturing the Method A verbatim note")
     parser.add_argument("--max-frames", type=int, default=DEFAULT_VISUAL_MAX_FRAMES,
                         help=f"cap on frames the visual layer reads (default {DEFAULT_VISUAL_MAX_FRAMES})")
     args = parser.parse_args(argv[1:])
 
     if not args.url.strip():
-        print("Usage: /youtube <video-url-or-id> [--visual] [--max-frames N]", file=sys.stderr)
+        print("Usage: /youtube <video-url-or-id> [--summary] [--visual] [--max-frames N]", file=sys.stderr)
         return 2
 
     try:
@@ -149,6 +262,13 @@ def main(argv: list[str]) -> int:
     except ValueError as e:
         print(f"❌ {e}", file=sys.stderr)
         return 2
+
+    # Default is the Method A capture: verbatim transcript + description + chapters,
+    # no LLM call. `--summary` opts into the older transcript-grounded summary.
+    if not args.summary:
+        if args.visual:
+            print("[/youtube] --visual applies to --summary; ignoring it in capture mode.", file=sys.stderr)
+        return _run_capture(video_id)
 
     print(f"[/youtube] Extracting video {video_id}...", file=sys.stderr)
 

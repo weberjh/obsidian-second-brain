@@ -1034,23 +1034,24 @@ Plain English: "notebooklm this", "ask my notebook about X", "ground a research 
 
 ---
 
-### `/youtube [url] [--visual]`
+### `/youtube [url] [--summary] [--visual]`
 
-**Extract and summarize a YouTube video.** Transcript (free, no API key) + metadata + top comments (Data API v3, optional) → summarized via Gemini (free tier), Grok fallback. Add `--visual` to also *watch* the video: scene-change frame extraction Claude reads with its own vision.
+**Capture a YouTube video verbatim, or summarize it.** Default is a **Method A capture**: the full description + the timestamped caption transcript grouped under the description's **official chapter markers** (or computed caption-stream sections), the manual-vs-auto track recorded, and a `content_hash` - a `type: source` note, no LLM in the loop. `--summary` instead LLM-summarizes via Gemini (free tier), Grok fallback.
 
 Steps:
 1. Parse video ID from URL or 11-char ID
-2. Run `uv run -m scripts.research.youtube_extract "<url>"` (add `--visual` for the frame layer, `--max-frames N` to cap frames read, default 24)
-3. Fetches transcript via `youtube-transcript-api`
-4. If `YOUTUBE_API_KEY` set: also fetches title, channel, view counts, top comments
-5. Sends transcript + comments to Gemini (Grok fallback) for AI-first summary: TL;DR, Key Points, Notable Quotes, Themes, Comment Sentiment, Worth Following Up On
-6. **Default save: auto-saves** to `Research/YouTube/YYYY-MM-DD - <video-title-slug>.md`
+2. Run `uv run -m scripts.research.youtube_extract "<url>"` (add `--summary` for the LLM note; `--visual` + `--summary` for the frame layer; `--max-frames N` caps frames read, default 24)
+3. Transcript via `youtube-transcript-api` (free); title/channel via oEmbed (free)
+4. If `YOUTUBE_API_KEY` is set: the Data API adds the full description, view counts and top comments
+5. **Capture (default):** description verbatim + transcript sections (chapters or computed), `type: source` frontmatter with `content_hash`
+6. **`--summary`:** transcript (+ comments) to Gemini (Grok fallback) for TL;DR, Key Points, Notable Quotes, Themes, Comment Sentiment, Worth Following Up On
+7. **Default save: auto-saves** to `Research/YouTube/YYYY-MM-DD - <title> (<channel>).md`
 
-**`--visual` layer:** downloads the video (yt-dlp, <=720p) and extracts one frame per scene change (ffmpeg scene detection, not a fixed timer), so on-screen text, code, diagrams, slides, UI, and b-roll are captured. Hero frames are copied into `Research/YouTube/attachments/<slug>/` and embedded in the note; the full keyframe set is left on disk. The script prints a `FRAMES-FOR-CLAUDE` block - Claude then reads those frames (its own vision, no extra API call) and fills the note's `## Visual notes` section keyed by timestamp. Requires `yt-dlp` + `ffmpeg` on PATH; if missing or download fails, the visual layer is skipped and the transcript summary still saves. The pipeline is ported from claude-watch/claude-video (MIT).
+**`--summary --visual` layer:** downloads the video (yt-dlp, <=720p) and extracts one frame per scene change (ffmpeg scene detection, not a fixed timer), so on-screen text, code, diagrams, slides, UI, and b-roll are captured. Hero frames are copied into `Research/YouTube/attachments/<slug>/` and embedded in the note; the full keyframe set is left on disk. The script prints a `FRAMES-FOR-CLAUDE` block - Claude then reads those frames (its own vision, no extra API call) and fills the note's `## Visual notes` section keyed by timestamp. Requires `yt-dlp` + `ffmpeg` on PATH; if missing or download fails, the visual layer is skipped and the transcript summary still saves. The pipeline is ported from claude-watch/claude-video (MIT).
 
-Plain English: "summarize this YouTube video", "extract this video", "watch this video", "what's on screen", or just paste a YouTube URL with a question. Use `--visual` when the ask is about what is *shown*, not just said.
+Plain English: capture - "transcribe this video", "save this video's transcript", "extract this YouTube link"; summarize - "summarize this YouTube video", "what's in this video". Use `--summary --visual` when the ask is about what is *shown*, not just said. When in doubt, capture: a capture can be summarized later.
 
-If the video has no captions and no API key set, the transcript path fails with a clear message; `--visual` can still read the video.
+If the video has no captions and no description (no `YOUTUBE_API_KEY`), the script fails with a clear message; `--summary --visual` can still read the video.
 
 ---
 
@@ -1074,7 +1075,7 @@ Spotify URLs are not supported (DRM blocks audio + transcript access). If no tra
 
 ### Cost tracking
 
-`/x-read`, `/x-pulse`, `/youtube` (Gemini-first summarize), `/podcast` (Grok summarize), and the Perplexity calls in `/research`/`/research-deep` log usage to `~/.research-toolkit/usage.log`. View monthly totals via:
+`/x-read`, `/x-pulse`, `/youtube` (Method A capture; Gemini-first summarize with `--summary`), `/podcast` (Grok summarize), and the Perplexity calls in `/research`/`/research-deep` log usage to `~/.research-toolkit/usage.log`. View monthly totals via:
 ```bash
 uv run python -c "from scripts.research.lib.usage import month_total; t,c = month_total(); print(f'\${t:.2f} across {c} calls')"
 ```
