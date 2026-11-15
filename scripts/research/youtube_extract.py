@@ -203,18 +203,28 @@ def _run_capture(video_id: str) -> int:
     url = f"https://www.youtube.com/watch?v={video_id}"
     print(f"[/youtube] Capturing video {video_id} (Method A)...", file=sys.stderr)
     meta = youtube.get_video_metadata(video_id) or {}
-    if not meta.get("title") or not meta.get("channel"):
-        oe = youtube.get_oembed(video_id) or {}
-        meta.setdefault("title", oe.get("title"))
-        meta.setdefault("channel", oe.get("channel"))
-    # Method A needs the description (it carries the chapters). The Data API
-    # supplies it when YOUTUBE_API_KEY is set; the public watch page supplies it
-    # for free otherwise, so a capture keeps its chapters without a key.
-    if not meta.get("description_full"):
-        wp = youtube.get_watch_page_meta(video_id) or {}
-        for k, v in wp.items():
+    desc_source = "youtube-data-api" if meta.get("description_full") else "none"
+
+    def _fill(src: dict | None) -> None:
+        for k, v in (src or {}).items():
             if v and not meta.get(k):
                 meta[k] = v
+
+    # Method A needs the description (it carries the chapters). Prefer the
+    # TranscriptAPI metadata call when TRANSCRIPTAPI_KEY is set (richest),
+    # then the free watch page; oEmbed covers title/channel with no key.
+    if not meta.get("description_full"):
+        tm = youtube.get_transcriptapi_metadata(video_id)
+        if tm and tm.get("description_full"):
+            desc_source = "transcriptapi"
+        _fill(tm)
+    if not meta.get("title") or not meta.get("channel"):
+        _fill(youtube.get_oembed(video_id))
+    if not meta.get("description_full"):
+        wp = youtube.get_watch_page_meta(video_id)
+        if wp and wp.get("description_full"):
+            desc_source = "watch-page"
+        _fill(wp)
     title = meta.get("title") or f"Video {video_id}"
     channel = meta.get("channel") or "(unknown channel)"
     published = meta.get("published_at") or "(unknown date)"
@@ -237,7 +247,8 @@ def _run_capture(video_id: str) -> int:
     vault.append_to_log(f"youtube capture on \"{title}\" - saved to {path.name}")
     kind = tg["kind"] if tg else "none"
     print(f"---\n[capture: {kind} captions · {len(tg['segments']) if tg else 0} segments · "
-          f"description {len(description)} chars · chapters: {len(youtube.parse_chapters(description))}]",
+          f"description {len(description)} chars via {desc_source} · "
+          f"chapters: {len(youtube.parse_chapters(description))}]",
           file=sys.stderr)
     return 0
 

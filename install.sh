@@ -137,6 +137,7 @@ if [[ "$setup_research" =~ ^[Yy]$ ]]; then
   echo "    XAI_API_KEY=          (https://console.x.ai)"
   echo "    PERPLEXITY_API_KEY=   (https://perplexity.ai/settings/api)"
   echo "    YOUTUBE_API_KEY=      (https://console.cloud.google.com - optional)"
+  echo "    TRANSCRIPTAPI_KEY=    (https://transcriptapi.com - optional, /youtube capture metadata)"
   echo ""
   read -r -p "  Press Enter to open the file in your default editor (or Ctrl+C to skip)... " _
   # Pick a default opener if $EDITOR is unset. Original used `open` (macOS-only).

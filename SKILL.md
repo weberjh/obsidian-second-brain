@@ -1042,7 +1042,7 @@ Steps:
 1. Parse video ID from URL or 11-char ID
 2. Run `uv run -m scripts.research.youtube_extract "<url>"` (add `--summary` for the LLM note; `--visual` + `--summary` for the frame layer; `--max-frames N` caps frames read, default 24)
 3. Transcript via `youtube-transcript-api` (free); title/channel via oEmbed (free)
-4. If `YOUTUBE_API_KEY` is set: the Data API adds the full description, view counts and top comments
+4. If `YOUTUBE_API_KEY` is set: the Data API adds the full description, view counts and top comments; else if `TRANSCRIPTAPI_KEY` is set, one TranscriptAPI metadata call adds the description (with chapters), counts, date and length; else the public watch page supplies the description for free
 5. **Capture (default):** description verbatim + transcript sections (chapters or computed), `type: source` frontmatter with `content_hash`
 6. **`--summary`:** transcript (+ comments) to Gemini (Grok fallback) for TL;DR, Key Points, Notable Quotes, Themes, Comment Sentiment, Worth Following Up On
 7. **Default save: auto-saves** to `Research/YouTube/YYYY-MM-DD - <title> (<channel>).md`

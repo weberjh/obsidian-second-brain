@@ -116,6 +116,39 @@ def test_parse_chapters_accepts_markdown_bullet_chapters():
     ]
 
 
+def test_transcriptapi_metadata_parses(monkeypatch):
+    import requests
+    from research.lib.youtube import get_transcriptapi_metadata
+
+    payload = {
+        "title": "How Semantic Layers Work",
+        "publishDate": "Apr 22, 2026",
+        "viewCountText": "12,507 views",
+        "description": "Learn why an organization's ontology matters.\n\n0:00 Intro\n1:30 Middle\n3:00 End",
+        "channel": {"channelId": "UCabc", "name": "ThoughtSpot"},
+        "details": {"lengthSeconds": 3200},
+    }
+    fake = type("R", (), {"status_code": 200, "json": staticmethod(lambda: payload)})()
+    monkeypatch.setattr(requests, "get", lambda *a, **k: fake)
+    monkeypatch.setenv("TRANSCRIPTAPI_KEY", "sk_test")
+
+    m = get_transcriptapi_metadata("abcdefghijk")
+    assert m["title"] == "How Semantic Layers Work"
+    assert m["channel"] == "ThoughtSpot"
+    assert m["channel_id"] == "UCabc"
+    assert m["description_full"].startswith("Learn why")
+    assert m["view_count"] == 12507
+    assert m["published_at"] == "2026-04-22"
+    assert m["duration"] == "PT53M20S"
+
+
+def test_transcriptapi_metadata_absent_without_key(monkeypatch):
+    from research.lib.youtube import get_transcriptapi_metadata
+
+    monkeypatch.delenv("TRANSCRIPTAPI_KEY", raising=False)
+    assert get_transcriptapi_metadata("abcdefghijk") is None
+
+
 def test_extract_json_after_handles_braces_in_strings():
     from research.lib.youtube import _extract_json_after
 

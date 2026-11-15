@@ -22,7 +22,7 @@ Use the obsidian-second-brain skill. Execute `/youtube [url] [--visual]`:
    - which caption track was used (**manual** vs **auto-generated**) and the language code;
    - a `content_hash` for drift detection, and `type: source` frontmatter (the raw-capture schema), so the note is evidence a later agent can re-read.
 
-   Free: `youtube-transcript-api` (no key) for the transcript, YouTube **oEmbed** (no key) for title/channel. With `YOUTUBE_API_KEY` the Data API adds the full description, view/like/comment counts.
+   Free: `youtube-transcript-api` (no key) for the transcript, YouTube **oEmbed** (no key) for title/channel, and the public watch page (no key) for the description. The description is what carries the chapter markers, so it is fetched with a preference order: `YOUTUBE_API_KEY` (YouTube Data API, free tier) → `TRANSCRIPTAPI_KEY` (TranscriptAPI, one paid call, also gives counts/date/length and the caption-track list) → the watch-page scrape (free). Any one is enough for chapters.
 
    Add `--summary` when the user wants the video *digested* rather than *preserved* (a TL;DR and key points): the transcript is LLM-summarized via Gemini (`GEMINI_API_KEY`, free tier) or Grok, the older `type: youtube` note.
    ```bash

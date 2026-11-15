@@ -259,6 +259,64 @@ def seconds_to_timestamp(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def get_transcriptapi_metadata(video_id: str) -> dict[str, Any] | None:
+    """TranscriptAPI metadata (one paid call) when TRANSCRIPTAPI_KEY is set.
+
+    A richer source than the free watch-page scrape: the full description (which
+    carries the chapter markers), view/like counts, the publish date, the length
+    and the caption-track list. Returns None when the key is unset or the call
+    fails, so the caller falls through to the free paths.
+    """
+    key = get_optional("TRANSCRIPTAPI_KEY", "")
+    if not key:
+        return None
+    try:
+        import requests
+        r = requests.get(
+            "https://transcriptapi.com/api/v2/youtube/video/metadata",
+            params={"video_url": f"https://www.youtube.com/watch?v={video_id}", "include": "details"},
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            print(f"[TranscriptAPI metadata HTTP {r.status_code}]")
+            return None
+        d = r.json()
+    except Exception as e:  # noqa: BLE001 - a keyed extra, never fatal
+        print(f"[TranscriptAPI metadata error: {type(e).__name__}: {e}]")
+        return None
+    chan = d.get("channel", {}) or {}
+    details = d.get("details", {}) or {}
+    published = d.get("publishDate")
+    if published:
+        try:
+            from datetime import datetime as _dt
+            published = _dt.strptime(published, "%b %d, %Y").strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001 - keep whatever the API said
+            pass
+    views = None
+    vm = re.search(r"[0-9][0-9,]*", d.get("viewCountText", "") or "")
+    if vm:
+        try:
+            views = int(vm.group(0).replace(",", ""))
+        except ValueError:
+            views = None
+    length = details.get("lengthSeconds")
+    try:
+        duration = f"PT{int(length) // 60}M{int(length) % 60}S" if length else None
+    except (TypeError, ValueError):
+        duration = None
+    return {
+        "title": d.get("title"),
+        "channel": chan.get("name"),
+        "channel_id": chan.get("channelId"),
+        "description_full": d.get("description", "") or "",
+        "view_count": views,
+        "published_at": published,
+        "duration": duration,
+    }
+
+
 def get_oembed(video_id: str) -> dict[str, Any] | None:
     """Free, no-key title/channel via YouTube's oEmbed endpoint. None on failure.
 
